@@ -1,0 +1,174 @@
+################################################################################
+# Pi-hole + Unbound Docker Compose
+# Production-ready configuration optimized for Raspberry Pi, but will work for any ARM based Linux install with Docker.
+# 
+# This setup provides:
+# - Ad-blocking DNS (Pi-hole)
+# - Recursive DNS resolution (Unbound) - no forwarding to Google/Cloudflare
+# - Automatic health checks and restarts
+# - Security hardening
+# - Performance optimizations for Raspberry Pi
+# - Portable configuration (no hardcoded paths)
+#
+# Usage:
+#   1. Place all files in a directory (e.g., ~/pihole/)
+#   2. Change the password below (FTLCONF_webserver_api_password)
+#   3. Update TZ to your timezone
+#   4. Run: sudo docker compose up -d
+#   5. Access web UI at: http://<your-pi-ip>:8443/admin
+#
+# Port 53 (DNS) and 8443 (Web UI) will be exposed on the host
+# All paths are relative - works for any user/location
+# Note: all comments are for documentation and can be removed for a cleaner file
+################################################################################
+
+services:
+  #-----------------------------------------------------------------------------
+  # Unbound - Recursive DNS resolver
+  # This service provides privacy by resolving DNS queries directly from root
+  # servers instead of forwarding to third-party DNS providers
+  #-----------------------------------------------------------------------------
+  unbound:
+    image: crazymax/unbound:latest
+    container_name: unbound
+    restart: unless-stopped
+
+    networks:
+      - dns_private
+
+    # Only expose to other containers, not to host
+    expose:
+      - "5053/tcp"
+      - "5053/udp"
+
+    volumes:
+      # Custom Unbound configuration (relative paths for portability)
+      - type: bind
+        source: ./unbound_conf.d
+        target: /config
+        read_only: true
+      - type: bind
+        source: ./unbound_root.hints
+        target: /etc/unbound/root.hints
+        read_only: true
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -zu 127.0.0.1 5053 && nc -z 127.0.0.1 5053"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    security_opt:
+      - no-new-privileges:true
+    
+    # Resource limits for Raspberry Pi
+    mem_limit: 256m
+    memswap_limit: 256m
+
+  #-----------------------------------------------------------------------------
+  # Pi-hole - Network-wide ad blocking
+  # Provides DNS-based ad blocking and a web interface for management
+  #-----------------------------------------------------------------------------
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    restart: unless-stopped
+
+    depends_on:
+      unbound:
+        condition: service_healthy
+
+    networks:
+      - dns_private
+
+    # Ports exposed to host
+    ports:
+      - "53:53/tcp"      # DNS
+      - "53:53/udp"      # DNS
+      - "8443:443/tcp"   # Web UI (HTTPS)
+
+    environment:
+      # Timezone - change to your location
+      TZ: "America/Chicago"
+
+      # Web UI password - CHANGE THIS!
+      # Note: You can also set this after first run with: docker exec pihole pihole -a -p
+      FTLCONF_webserver_api_password: "password"
+
+      # Network Configuration
+      FTLCONF_dns_listeningMode: "ALL"
+      
+      # Use Unbound for all DNS queries (recursive DNS)
+      FTLCONF_dns_upstreams: "unbound#5053"
+
+      # Run as root to avoid permission issues while maintaining container isolation
+      # This is the recommended approach for Docker deployments
+      DNSMASQ_USER: "root"
+
+      # Web Interface Configuration
+      FTLCONF_webserver_domain: "pi.hole"
+      
+      # Enable query logging with timestamps
+      FTLCONF_misc_etc_dnsmasq_d: "true"
+      
+      # Logging configuration - fixes timestamp display
+      FTLCONF_debug_database: "false"
+      FTLCONF_debug_queries: "false"
+      
+      # Performance optimizations for Raspberry Pi
+      FTLCONF_maxDBdays: "365"           # Keep 1 year of logs
+      FTLCONF_database_maxQueries: "100000"  # Limit DB size for Pi
+      
+      # Privacy settings
+      FTLCONF_reply_addr4_private: "true"
+
+    volumes:
+      # Named volumes - automatically managed by Docker
+      - pihole_config:/etc/pihole
+      - pihole_dnsmasq:/etc/dnsmasq.d
+
+    # Temporary filesystems for performance on Raspberry Pi SD cards
+    tmpfs:
+      - /var/log
+      - /tmp
+
+    healthcheck:
+      test: ["CMD-SHELL", "pihole status || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    security_opt:
+      - no-new-privileges:true
+    
+    # Only add the capabilities we actually need
+    cap_add:
+      - NET_BIND_SERVICE
+      - NET_RAW
+      - NET_ADMIN
+      - CHOWN
+      - DAC_OVERRIDE
+
+    # Resource limits for Raspberry Pi
+    mem_limit: 512m
+    memswap_limit: 512m
+
+################################################################################
+# Networks
+################################################################################
+networks:
+  dns_private:
+    driver: bridge
+
+################################################################################
+# Volumes
+# These are automatically created and managed by Docker
+# Data persists across container updates and rebuilds
+################################################################################
+volumes:
+  pihole_config:
+    name: pihole_config
+  pihole_dnsmasq:
+    name: pihole_dnsmasq
