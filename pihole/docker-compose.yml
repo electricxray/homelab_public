@@ -29,7 +29,7 @@ services:
   # servers instead of forwarding to third-party DNS providers
   #-----------------------------------------------------------------------------
   unbound:
-    image: crazymax/unbound:latest
+    image: crazymax/unbound:1.24.0
     container_name: unbound
     restart: unless-stopped
 
@@ -71,7 +71,7 @@ services:
   # Provides DNS-based ad blocking and a web interface for management
   #-----------------------------------------------------------------------------
   pihole:
-    image: pihole/pihole:latest
+    image: pihole/pihole:2026.02.0
     container_name: pihole
     restart: unless-stopped
 
